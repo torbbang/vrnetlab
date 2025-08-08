@@ -189,7 +189,11 @@ feature grpc
         else:
             self.logger.warning("User provided startup configuration is not found.")
 
+        # set `terminal dont-ask` to avoid confirmation prompts
+        # during startup config deployment
+        con.send_config("terminal dont-ask")
         res = con.send_configs(n9kv_config.splitlines())
+        con.send_config("no terminal dont-ask")
         con.send_config("copy running-config startup-config")
 
         for response in res:
