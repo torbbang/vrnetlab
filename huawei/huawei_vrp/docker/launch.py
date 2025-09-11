@@ -184,10 +184,10 @@ class VRP_vm(vrnetlab.VM):
                 break
         self.wait_write(cmd="undo shutdown", wait=None)
         self.wait_write(cmd="ip binding vpn-instance __MGMT_VPN__", wait="]")
-        self.wait_write(cmd="ip address 10.0.0.15 24", wait="]")
+        self.wait_write(cmd=f"ip address {self.mgmt_address_ipv4.replace('/', ' ')}", wait="]")
         self.wait_write(cmd="quit", wait="]")
         self.wait_write(
-            cmd="ip route-static vpn-instance __MGMT_VPN__ 0.0.0.0 0 10.0.0.2", wait="]"
+            cmd=f"ip route-static vpn-instance __MGMT_VPN__ 0.0.0.0 0 {self.mgmt_gw_ipv4}", wait="]"
         )
 
     def bootstrap_config(self):
