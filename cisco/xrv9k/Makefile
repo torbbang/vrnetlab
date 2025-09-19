@@ -2,7 +2,7 @@ VENDOR=Cisco
 NAME=XRv9k
 IMAGE_FORMAT=qcow2
 IMAGE_GLOB=*qcow2*
-INSTALL=true
+INSTALL=false
 
 # match versions like:
 # TODO: add example file names here

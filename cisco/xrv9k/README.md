@@ -20,18 +20,6 @@ non-9k see the 'xrv' directory instead.
 
 ## Building the docker image
 
-By default the XRv9k build time will take ~20 minutes as the image undergoes a first boot installation phase. This greatly decreases boot times for your labs.
-
-The install procedure introduces some side effects as various values (such as macpool) are baked-in during this installation procedure.
-
-This can cause issues, and for this reason you may want to disable the pre-install procedure. You can do this by issuing:
-
-```
-make docker-image INSTALL=false
-```
-
-> Please note that disabling the install feature will mean the boot time of XRv9k will increase to 20+ minutes.
-
 ### Installation steps
 
 1. Obtain the XRv9k image (.qcow2) from Cisco (or CML). A .iso version is also shipped but this is currently unsupported and you must convert the .iso to .qcow2.
@@ -44,6 +32,26 @@ make docker-image INSTALL=false
 
 > The tag is the same as the version of the XRv9k image,
 so if you have xrv9k-fullk9-x.vrr-6.2.1.qcow2 your final docker image will be called vr-xrv9k:6.2.1
+
+## Install option
+
+The XRv9k takes 20+ minutes to boot on the initial boot, this is because of a 'baking' process. 
+
+This means when used in your labs, this first boot will occur every time you deploy your lab. To help with this, there is an install feature.
+
+When enabled, on image build the XRv9k is booted so that this first boot baking process is completed, meaning when used in your labs the XRv9k boot time should be much shorter.
+
+The install procedure introduces some side effects as various values (such as macpool) are baked-in during this installation procedure.
+
+This can cause issues, and for this reason you may want consider carefully whether to enable it or not.
+
+Enable the install feature by using the following command when building XRv9k:
+
+```
+make docker-image INSTALL=true
+```
+
+> Please note that disabling the install feature will mean the boot time of XRv9k will increase to 20+ minutes.
 
 ## Known working versions
 
