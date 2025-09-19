@@ -19,6 +19,8 @@ Copy the Cat9kv .qcow2 file in this directory and you can perform `make docker-i
 
 The UADP and Q200 use the same .qcow2 image. The default image created is the UADP image.
 
+> It is possible to tag the UADP and Q200 builds separately by prefixing the version in the filename. For example: `cat9kv_prd.Q200-x.y.z.qcow2` or `cat9kv_prd.UADP-x.y.z.qcow2`
+
 To configure the Q200 image or enable a higher throughput dataplane for UADP; you must supply the relevant `vswitch.xml` file. You can place that file in this directory and build the image.
 
 > You can obtain a `vswitch.xml` file from the relevant CML node definiton file.
