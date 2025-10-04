@@ -3,18 +3,13 @@
 This is the vrnetlab docker image for Cisco Catalyst 8000V Edge Software, or
 'c8000v' for short.
 
-The Catalyst 8000v platform is a successor to the CSR 1000v. As such, this
-platform directory 'c8000v' started off as a copy of the 'csr' directory. With
-time we imagine the two platforms will diverge. One such change is already
-planned to support using the Catalyst 8000v in one of the two modes:
+The Catalyst 8000v platform is a successor to the CSR 1000v and supports two
+operating modes:
 
-- regular,
-- SD-WAN Controller mode (managed by Viptela).
+- **Autonomous mode** - Standard IOS-XE routing platform
+- **Controller mode** - SD-WAN managed mode (Viptela)
 
-Right now the SD-WAN flavor is still split off because to enable the Controller
-mode you have to effectively boot the router into a completely different mode.
-In the near future these modifications will be merged back into the 'c8000v'
-platform that will produce both the regular and sd-wan images.
+The build process automatically produces both variants from a single qcow2 image.
 
 On installation of Catalyst 8000v the user is presented with the choice of
 output, which can be over serial console, a video console or through automatic
@@ -33,20 +28,30 @@ which essentially just assembles the required files, then run it with
 we shut down the VM and commit this new state into the final docker image. This
 is unorthodox but works and saves us a lot of time.
 
+**Note:** This installation process is not performed for controller mode,
+as serial-enabled qcow2 images already have the correct console configuration.
+
 ## Building the docker image
 
 Put the .qcow2 file in this directory and run `make docker-image` and you should
-be good to go. The resulting image is called `vr-c8000v`. You can tag it with
-something else if you want, like `my-repo.example.com/vr-c8000v` and then push
-it to your repo. The tag is the same as the version of the Catalyst 8000v image,
-so if you have c8000v-universalk9.16.04.01.qcow2 your final docker image will be
-called `vr-c8000v:16.04.01`
+be good to go. The build process automatically produces both autonomous and controller
+mode variant images from a single qcow2 file.
+
+**Note:** Controller mode requires a serial-enabled image (e.g.,
+`c8000v-universalk9_16G_serial.17.12.05a.qcow2`).
+
+The resulting images are called `vr-c8000v:VERSION` and `vr-c8000v:controller-VERSION`.
+You can tag them with something else if you want, like `my-repo.example.com/vr-c8000v`
+and then push to your repo. The tag is the same as the version of the Catalyst 8000v
+image, so if you have c8000v-universalk9.16.04.01.qcow2 your final docker images will be
+called `vr-c8000v:16.04.01` and `vr-c8000v:controller-16.04.01`
 
 It's been tested to boot and respond to SSH with:
 
 - 16.03.01a (c8000v-universalk9.16.03.01a.qcow2)
 - 16.04.01 (c8000v-universalk9.16.04.01.qcow2)
 - 17.11.01a (c8000v-universalk9_16G_serial.17.11.01a.qcow2)
+- 17.16.01a (c8000v_universalk9_8g_seria.qcow2) - Autonomous and controller modes tested
 
 ## Usage
 

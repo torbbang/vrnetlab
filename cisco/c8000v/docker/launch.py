@@ -41,6 +41,7 @@ logging.Logger.trace = trace
 class C8000v_vm(vrnetlab.VM):
     def __init__(self, hostname, username, password, conn_mode, install_mode=False):
         disk_image = None
+
         for e in sorted(os.listdir("/")):
             if not disk_image and re.search(".qcow2$", e):
                 disk_image = "/" + e
@@ -61,19 +62,35 @@ class C8000v_vm(vrnetlab.VM):
         self.num_nics = 9
         self.nic_type = "virtio-net-pci"
         self.image_name = "config.iso"
+        self.mode = os.environ.get('MODE', 'autonomous')
 
         if self.install_mode:
             self.logger.debug("Install mode")
-            self.create_config_image(self.gen_install_config())
+            if self.mode == 'controller':
+                # Controller mode uses serial-enabled images, no install needed
+                self.logger.info("Controller mode: skipping install, creating empty config ISO")
+                self.create_config_image("", install=True)
+            else:
+                # Autonomous mode needs install to set serial console and license level
+                self.logger.info("Autonomous mode: generating install config")
+                cfg = self.gen_install_config()
+                self.create_config_image(cfg, install=True)
         else:
-            cfg = self.gen_bootstrap_config()
             if os.path.exists(STARTUP_CONFIG_FILE):
                 self.logger.info("Startup configuration file found")
                 with open(STARTUP_CONFIG_FILE, "r") as startup_config:
-                    cfg += startup_config.read()
+                    startup_cfg = startup_config.read()
+                # If startup config is already MIME-wrapped, use it as-is
+                if "MIME-Version:" in startup_cfg:
+                    self.logger.info("MIME-wrapped config detected, using as-is")
+                    cfg = startup_cfg
+                else:
+                    # Otherwise, append to bootstrap config
+                    cfg = self.gen_bootstrap_config() + startup_cfg
             else:
                 self.logger.warning("User provided startup configuration is not found.")
-            self.create_config_image(cfg)
+                cfg = self.gen_bootstrap_config()
+            self.create_config_image(cfg, install=False)
 
         self.qemu_args.extend(["-cdrom", "/" + self.image_name])
 
@@ -111,37 +128,49 @@ do reload
         """
 
         v4_mgmt_address = vrnetlab.cidr_to_ddn(self.mgmt_address_ipv4)
+        is_autonomous = self.mode != 'controller'
 
-        return f"""hostname {self.hostname}
+        # Controller mode uses VRF 513, autonomous mode uses clab-mgmt
+        if self.mode == 'controller':
+            vrf_name = "513"
+            vrf_description = "Initial containerlab management VRF (Replace with 512 on provisioning)"
+        else:
+            vrf_name = "clab-mgmt"
+            vrf_description = "Containerlab management VRF (DO NOT DELETE)"
+
+        # Build autonomous-specific config sections
+        crypto_key = "crypto key generate rsa modulus 2048\n!" if is_autonomous else "!"
+        login_local = "login local" if is_autonomous else "!"
+
+        config = f"""hostname {self.hostname}
 username {self.username} privilege 15 password {self.password}
 ip domain name example.com
 !
-crypto key generate rsa modulus 2048
-!
+{crypto_key}
 line con 0
 logging synchronous
 !
 line vty 0 4
 logging synchronous
-login local
+{login_local}
 transport input all
 !
 ipv6 unicast-routing
 !
-vrf definition clab-mgmt
-description Containerlab management VRF (DO NOT DELETE)
+vrf definition {vrf_name}
+description {vrf_description}
 address-family ipv4
 exit
 address-family ipv6
 exit
 exit
 !
-ip route vrf clab-mgmt 0.0.0.0 0.0.0.0 {self.mgmt_gw_ipv4}
-ipv6 route vrf clab-mgmt ::/0 {self.mgmt_gw_ipv6}
+ip route vrf {vrf_name} 0.0.0.0 0.0.0.0 {self.mgmt_gw_ipv4}
+ipv6 route vrf {vrf_name} ::/0 {self.mgmt_gw_ipv6}
 !
 interface GigabitEthernet 1
 description Containerlab management interface
-vrf forwarding clab-mgmt
+vrf forwarding {vrf_name}
 ip address {v4_mgmt_address[0]} {v4_mgmt_address[1]}
 ipv6 address {self.mgmt_address_ipv6}
 no shut
@@ -157,10 +186,40 @@ ip ssh maxstartups 128
 !
 """
 
-    def create_config_image(self, config):
+        return config
+
+    def create_config_image(self, config, install=False):
         """Creates a iso image with a installation configuration"""
 
-        with open("/iosxe_config.txt", "w") as cfg:
+        # Determine config filename based on install mode and MODE
+        if install:
+            config_filename = "/iosxe_config.txt"
+        elif self.mode == 'controller':
+            config_filename = "/ciscosdwan_cloud_init.cfg"
+        else:
+            config_filename = "/iosxe_config.txt"
+
+        # For controller mode bootstrap, wrap config in MIME structure if not already present
+        if self.mode == 'controller' and not install and "MIME-Version:" not in config:
+            # Indent the config (add 2 spaces to each line)
+            indented_config = "\n".join("  " + line for line in config.split("\n"))
+
+            config = f"""Content-Type: multipart/mixed; boundary="===================================="
+MIME-Version: 1.0
+--====================================
+#cloud-config
+vinitparam:
+ - uuid : C8K-00000000-0000-0000-0000-000000000000
+ - otp : 00000000000000000000000000000000
+ - vbond : 0.0.0.0
+ - org : null
+--====================================
+#cloud-boothook
+{indented_config}
+--====================================--
+"""
+
+        with open(config_filename, "w") as cfg:
             cfg.write(config)
 
         genisoimage_args = [
@@ -168,7 +227,7 @@ ip ssh maxstartups 128
             "-l",
             "-o",
             "/" + self.image_name,
-            "/iosxe_config.txt",
+            config_filename,
         ]
 
         self.logger.debug("Generating boot ISO")
@@ -177,15 +236,33 @@ ip ssh maxstartups 128
     def bootstrap_spin(self):
         """This function should be called periodically to do work."""
 
+        # Controller mode install is a no-op (serial-enabled images)
+        if self.install_mode and self.mode == 'controller':
+            if not self.running:
+                self.logger.info("Controller mode install: marking as complete immediately")
+                self.running = True
+            return
+
         if self.spins > 300:
             # too many spins with no result ->  give up
             self.stop()
             self.start()
             return
 
-        (ridx, match, res) = self.con_expect(
-            [b"CVAC-4-CONFIG_DONE", b"IOSXEBOOT-4-FACTORY_RESET"]
-        )
+        # Different expectations for autonomous vs controller mode
+        if self.mode == 'controller':
+            (ridx, match, res) = self.con_expect(
+                [b"CVAC-4-CONFIG_DONE",
+                 b"IOSXEBOOT-4-FACTORY_RESET",
+                 b"All daemons up",
+                 b"vip-bootstrap: All daemons up",
+                 b"Error extracting config"]
+            )
+        else:
+            (ridx, match, res) = self.con_expect(
+                [b"CVAC-4-CONFIG_DONE", b"IOSXEBOOT-4-FACTORY_RESET"]
+            )
+
         if match:  # got a match!
             if ridx == 0 and not self.install_mode:  # configuration applied
                 self.logger.info("CVAC Configuration has been applied.")
@@ -205,6 +282,20 @@ ip ssh maxstartups 128
                     return
                 else:
                     self.logger.warning("Unexpected reload while running")
+            elif self.mode == 'controller' and (ridx == 2 or ridx == 3):  # Controller mode daemons up
+                self.logger.info("Controller mode configuration complete - all daemons up.")
+                # close telnet connection
+                self.scrapli_tn.close()
+                # startup time?
+                startup_time = datetime.datetime.now() - self.start_time
+                self.logger.info("Controller mode startup complete in: %s", startup_time)
+                # mark as running
+                self.running = True
+                return
+            elif self.mode == 'controller' and ridx == 4:  # Controller mode config error
+                self.logger.error("Controller mode configuration failed - error extracting config")
+                self.logger.error("Router may need manual intervention or config correction")
+                # Don't mark as running, let it continue trying or timeout
 
         # no match, if we saw some output from the router it's probably
         # booting, so let's give it some more time
