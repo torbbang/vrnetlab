@@ -472,8 +472,9 @@ class VM:
         if os.path.exists(snapshot_state):
             self.logger.info("Resuming VM after snapshot restore")
             self._qemu_monitor_cmd("cont")
-        
-        # Mark VM as running - snapshot restored a fully booted VM
+
+            # Mark VM as running 
+            self.running = True
 
             # Close serial console connection to free it for external access
             try:
