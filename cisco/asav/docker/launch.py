@@ -53,7 +53,6 @@ class ASAv_vm(vrnetlab.VM):
             disk_image=disk_image,
             ram=2048,
             cpu="Nehalem",
-            use_scrapli=True,
         )
         self.hostname = hostname
         self.nic_type = "e1000"

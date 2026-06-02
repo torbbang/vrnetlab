@@ -54,7 +54,6 @@ class XRv9k_vm(vrnetlab.VM):
             disk_image=disk_image,
             ram=ram,
             smp=f"cores={vcpu},threads=1,sockets=1",
-            use_scrapli=True,
             cpu="host,+ssse3,+sse4.1,+sse4.2,+x2apic",
         )
         

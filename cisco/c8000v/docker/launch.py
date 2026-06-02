@@ -54,7 +54,7 @@ class C8000v_vm(vrnetlab.VM):
             self.license = True
 
         super().__init__(
-            username, password, disk_image=disk_image, ram=4096, use_scrapli=True
+            username, password, disk_image=disk_image, ram=4096
         )
         self.install_mode = install_mode
         self.hostname = hostname

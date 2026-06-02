@@ -914,7 +914,6 @@ class SROS_vm(vrnetlab.VM):
             ram=ram,
             driveif="virtio",
             smp=f"{cpu}",
-            use_scrapli=True,
         )
 
         self.nic_type = "virtio-net-pci"

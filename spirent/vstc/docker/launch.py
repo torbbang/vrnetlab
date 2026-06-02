@@ -41,7 +41,7 @@ class STC_vm(vrnetlab.VM):
                 disk_image = "/" + e
 
         super(STC_vm, self).__init__(
-            username, password, disk_image=disk_image, use_scrapli=True, min_dp_nics=1, mgmt_passthrough=True
+            username, password, disk_image=disk_image, min_dp_nics=1, mgmt_passthrough=True
         )
 
         self.hostname = hostname

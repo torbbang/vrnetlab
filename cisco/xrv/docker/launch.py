@@ -45,7 +45,7 @@ class XRV_vm(vrnetlab.VM):
             if re.search(".vmdk", e):
                 disk_image = "/" + e
         super(XRV_vm, self).__init__(
-            username, password, disk_image=disk_image, ram=3072, use_scrapli=True
+            username, password, disk_image=disk_image, ram=3072
         )
         self.hostname = hostname
         self.conn_mode = conn_mode

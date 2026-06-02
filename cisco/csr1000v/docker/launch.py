@@ -56,7 +56,7 @@ class CSR_vm(vrnetlab.VM):
             self.license = True
 
         super(CSR_vm, self).__init__(
-            username, password, disk_image=disk_image, use_scrapli=True
+            username, password, disk_image=disk_image
         )
 
         self.install_mode = install_mode

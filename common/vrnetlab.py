@@ -12,15 +12,11 @@ import shutil
 import subprocess
 import sys
 import tarfile
-import telnetlib
 import tempfile
 import time
 from pathlib import Path
 
-try:
-    from scrapli import Driver
-except ImportError:
-    pass
+from scrapli import Driver
 
 MAX_RETRIES = 60
 
@@ -83,6 +79,70 @@ def boot_delay():
         time.sleep(int(delay))
 
 
+class _Console:
+    """telnetlib-compatible wrapper around a scrapli channel (qemu serial console / monitor)."""
+
+    def __init__(self, driver):
+        self._driver = driver
+
+    def open(self):
+        self._driver.open()
+
+    def close(self):
+        self._driver.close()
+
+    def write(self, data):
+        if isinstance(data, bytes):
+            data = data.decode(errors="ignore")
+        self._driver.channel.write(data)
+
+    def _read(self):
+        data = self._driver.channel.read()
+        if data:
+            # mirror console output to stdout so it shows up in docker logs
+            sys.stdout.buffer.write(data)
+            sys.stdout.buffer.flush()
+        return data
+
+    def read_very_eager(self):
+        """Return whatever bytes are currently available (telnetlib-compatible)."""
+        return self._read()
+
+    def read_until(self, expected, timeout=None):
+        """Read until the literal expected bytes are seen, or timeout (telnetlib-compatible)."""
+        if isinstance(expected, str):
+            expected = expected.encode()
+        buf = b""
+        t_end = time.time() + timeout if timeout else None
+        while expected not in buf:
+            data = self._read()
+            buf += data
+            if not data:
+                time.sleep(0.1)
+            if t_end and time.time() > t_end:
+                break
+        return buf
+
+    def expect(self, regex_list, timeout=None):
+        """Regex-match byte patterns against the stream (telnetlib.expect-compatible).
+
+        Returns (index, match, buffer), or (-1, None, buffer) on timeout.
+        """
+        buf = b""
+        t_end = time.time() + timeout if timeout else None
+        while True:
+            data = self._read()
+            buf += data
+            if not data:
+                time.sleep(0.1)
+            for i, pat in enumerate(regex_list):
+                match = re.search(pat.decode(), buf.decode(errors="ignore"))
+                if match:
+                    return i, match, buf
+            if t_end and time.time() > t_end:
+                return -1, None, buf
+
+
 class VM:
     def __str__(self):
         return self.__class__.__name__
@@ -110,11 +170,9 @@ class VM:
         mgmt_intf="eth0",
         mgmt_dhcp=False,
         min_dp_nics=0,
-        use_scrapli=False,
         data_intf_prefix="eth",
         arch="x86_64",
     ):
-        self.use_scrapli = use_scrapli
         self.arch = arch
 
         # configure logging
@@ -129,38 +187,39 @@ class VM:
         
         scrapli_log_level = logging.DEBUG if os.getenv("DEBUG_SCRAPLI", "false").lower() == "true" else logging.INFO
         self.scrapli_logger.setLevel(scrapli_log_level)
-        
-        
 
-        # configure scrapli
-        if self.use_scrapli:
-            # init scrapli_tn -- main telnet device
-            scrapli_tn_dev = {
-                "host": "127.0.0.1",
-                "port": 5000 + num,
-                "auth_bypass": True,
-                "auth_strict_key": False,
-                "transport": "telnet",
-                "timeout_socket": 3600,
-                "timeout_transport": 3600,
-                "timeout_ops": 3600,
-            }
+        # init scrapli_tn -- main telnet device
+        scrapli_tn_dev = {
+            "host": "127.0.0.1",
+            "port": 5000 + num,
+            "auth_bypass": True,
+            "auth_strict_key": False,
+            "transport": "telnet",
+            "timeout_socket": 3600,
+            "timeout_transport": 3600,
+            "timeout_ops": 3600,
+        }
 
-            self.scrapli_tn = Driver(**scrapli_tn_dev)
+        self.scrapli_tn = Driver(**scrapli_tn_dev)
 
-            # init scrapli_qm_dev -- qemu monitor device
-            scrapli_qm_dev = {
-                "host": "127.0.0.1",
-                "port": 4000 + num,
-                "auth_bypass": True,
-                "auth_strict_key": False,
-                "transport": "telnet",
-                "timeout_socket": 3600,
-                "timeout_transport": 3600,
-                "timeout_ops": 3600,
-            }
+        # init scrapli_qm_dev -- qemu monitor device
+        scrapli_qm_dev = {
+            "host": "127.0.0.1",
+            "port": 4000 + num,
+            "auth_bypass": True,
+            "auth_strict_key": False,
+            "transport": "telnet",
+            "timeout_socket": 3600,
+            "timeout_transport": 3600,
+            "timeout_ops": 3600,
+        }
 
-            self.scrapli_qm = Driver(**scrapli_qm_dev)
+        self.scrapli_qm = Driver(**scrapli_qm_dev)
+
+        # telnetlib-compatible facades the launchers use: self.tn drives the
+        # serial console, self.qm the qemu monitor.
+        self.tn = _Console(self.scrapli_tn)
+        self.qm = _Console(self.scrapli_qm)
 
         # username / password to configure
         self.username = username
@@ -172,7 +231,6 @@ class VM:
         self.running = False
         self.spins = 0
         self.p = None
-        self.tn = None
 
         self._ram = ram
         self._cpu = cpu
@@ -365,11 +423,7 @@ class VM:
         mgmt_passthrough_coloured = format_bool_color(
             self.mgmt_passthrough, "Enabled", "Disabled"
         )
-        use_scrapli_coloured = format_bool_color(
-            self.use_scrapli, "Enabled", "Disabled"
-        )
 
-        self.logger.info(f"Scrapli: {use_scrapli_coloured}")
         self.logger.info(f"Transparent mgmt interface: {mgmt_passthrough_coloured}")
 
         self.start_time = datetime.datetime.now()
@@ -424,10 +478,7 @@ class VM:
 
         for i in range(1, MAX_RETRIES + 1):
             try:
-                if self.use_scrapli:
-                    self.scrapli_qm.open()
-                else:
-                    self.qm = telnetlib.Telnet("127.0.0.1", 4000 + self.num)
+                self.scrapli_qm.open()
                 break
             except:
                 self.logger.error(
@@ -445,13 +496,7 @@ class VM:
 
         for i in range(1, MAX_RETRIES + 1):
             try:
-                if self.use_scrapli:
-                    self.scrapli_tn.open()
-                else:
-                    self.tn = telnetlib.Telnet("127.0.0.1", 5000 + self.num)
-                    # This enables super verbose telnetlib debugging
-                    # if self.logger.isEnabledFor(logging.DEBUG):
-                    #     self.tn.set_debuglevel(2)
+                self.scrapli_tn.open()
                 break
             except:
                 self.logger.error(
@@ -477,12 +522,8 @@ class VM:
 
             # Close serial console connection to free it for external access
             try:
-                if self.use_scrapli:
-                    self.scrapli_tn.close()
-                    self.logger.info("Closed scrapli serial connection")
-                else:
-                    self.tn.close()
-                    self.logger.info("Closed telnet serial connection")
+                self.scrapli_tn.close()
+                self.logger.info("Closed scrapli serial connection")
             except Exception as e:
                 self.logger.warning(f"Could not close serial connection: {e}")
 
@@ -892,11 +933,8 @@ class VM:
         """Wait for something on the serial port and then send command
 
         Defaults to using self.tn as connection but this can be overridden
-        by passing a telnetlib.Telnet object in the con argument.
+        by passing self.qm (the qemu monitor) in the con argument.
         """
-
-        if self.use_scrapli:
-            return self.wait_write_scrapli(cmd, wait)
 
         con_name = "custom con"
         if con is None:
@@ -933,30 +971,6 @@ class VM:
 
         self.logger.debug(f"writing to {con_name}: '{cmd}'")
         con.write("{}\r".format(cmd).encode())
-
-    def wait_write_scrapli(self, cmd, wait="__defaultpattern__"):
-        """
-        Wait for something on the serial port and then send command using Scrapli telnet channel
-
-        Arguments are:
-        - cmd: command to send (string)
-        - wait: prompt to wait for before sending command, defaults to # (string)
-        """
-        if wait:
-            # use class default wait pattern if none was explicitly specified
-            if wait == "__defaultpattern__":
-                wait = self.wait_pattern
-
-            self.logger.info(f"Waiting on console for: '{wait}'")
-
-            self.con_read_until(wait)
-
-        time.sleep(0.1)  # don't write to the console too fast
-
-        self.write_to_stdout(b"\n")
-
-        self.logger.info(f"Writing to console: '{cmd}'")
-        self.scrapli_tn.channel.write(f"{cmd}\r")
 
     def con_expect(self, regex_list, timeout=None):
         """
@@ -1050,17 +1064,11 @@ class VM:
     def _qemu_monitor_cmd(self, cmd, wait=False):
         """Send command to QEMU monitor. Returns output if wait is True."""
         try:
-            if self.use_scrapli:
-                self.scrapli_qm.channel.write(f"{cmd}\r")
-            else:
-                self.qm.write(f"{cmd}\r".encode())
+            self.qm.write(f"{cmd}\r".encode())
 
             if wait:
                 time.sleep(0.5)
-                if self.use_scrapli:
-                    return self.scrapli_qm.channel.read().decode()
-                else:
-                    return self.qm.read_very_eager().decode()
+                return self.qm.read_very_eager().decode()
             return None
         except Exception as e:
             self.logger.error(f"Failed to communicate with QEMU monitor: {e}")

@@ -50,7 +50,6 @@ class NXOS_vm(vrnetlab.VM):
             disk_image=disk_image,
             ram=4096,
             smp="2",
-            use_scrapli=True,
         )
         self.credentials = [["admin", "admin"]]
         self.hostname = hostname

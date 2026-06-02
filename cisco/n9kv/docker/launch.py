@@ -54,7 +54,6 @@ class N9KV_vm(vrnetlab.VM):
             ram=10240,
             smp=4,
             cpu="host",
-            use_scrapli=True,
         )
         self.hostname = hostname
         self.conn_mode = conn_mode

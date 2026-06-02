@@ -54,7 +54,6 @@ class cat9kv_vm(vrnetlab.VM):
             smp=f"cores={vcpu},threads=1,sockets=1",
             ram=ram,
             min_dp_nics=8,
-            use_scrapli=True,
         )
         self.hostname = hostname
         self.conn_mode = conn_mode
