@@ -478,6 +478,10 @@ class VM:
 
         for i in range(1, MAX_RETRIES + 1):
             try:
+                try:
+                    self.scrapli_qm.close()
+                except Exception:
+                    pass
                 self.scrapli_qm.open()
                 break
             except:
@@ -496,6 +500,10 @@ class VM:
 
         for i in range(1, MAX_RETRIES + 1):
             try:
+                try:
+                    self.scrapli_tn.close()
+                except Exception:
+                    pass
                 self.scrapli_tn.open()
                 break
             except:
