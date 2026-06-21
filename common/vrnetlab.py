@@ -11,7 +11,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 import time
 from pathlib import Path
@@ -398,7 +397,7 @@ class VM:
 
         # If restoring from snapshot, add -incoming parameter
         if restoring_snapshot:
-            self.qemu_args.extend(["-incoming", f"exec:cat\\ \\<\\ {snapshot_state}"])
+            self.qemu_args.extend(["-incoming", "defer"])
 
         # add additional qemu args if they were provided
         if self.qemu_additional_args:
@@ -520,13 +519,21 @@ class VM:
                     )
                 )
 
-        # If we restored from snapshot, resume the VM (it's paused after migration)
+        # If we restored from snapshot, pull the saved state in and resume the VM.
         snapshot_state = f"/snapshot-data/vm{self.num}/state.img"
         if os.path.exists(snapshot_state):
+            self.logger.info("Restoring VM state from snapshot")
+            threads = os.cpu_count() or 8
+            self._qemu_monitor_cmd("migrate_set_capability multifd on")
+            self._qemu_monitor_cmd("migrate_set_capability mapped-ram on")
+            self._qemu_monitor_cmd(f"migrate_set_parameter multifd-channels {threads}")
+
+            self._qemu_monitor_cmd(f'migrate_incoming "file:{snapshot_state}"')
             self.logger.info("Resuming VM after snapshot restore")
             self._qemu_monitor_cmd("cont")
-        
-        # Mark VM as running - snapshot restored a fully booted VM
+
+            # Mark VM as running
+            self.running = True
 
             # Close serial console connection to free it for external access
             try:
@@ -1087,43 +1094,39 @@ class VM:
         os.makedirs(vm_dir, exist_ok=True)
 
         state_file = os.path.join(vm_dir, "state.img")
-        
+
         try:
             # Pause VM
             self.logger.info(f"Pausing VM {self.num}")
             self._qemu_monitor_cmd("stop")
             time.sleep(1)
 
-            # Start migration
+            # Start migration.
             self.logger.info(f"Saving state for VM {self.num}")
+
+            threads = os.cpu_count() or 8
+            self._qemu_monitor_cmd("migrate_set_capability multifd on")
+            self._qemu_monitor_cmd("migrate_set_capability mapped-ram on")
+            self._qemu_monitor_cmd(f"migrate_set_parameter multifd-channels {threads}")
+
             self._qemu_monitor_cmd("migrate_set_parameter max-bandwidth 100000000000")
-            self._qemu_monitor_cmd(f'migrate "exec:cat > {state_file}"')
+            self._qemu_monitor_cmd(f'migrate "file:{state_file}"')
 
-            # Wait for migration complete
-            timeout = 600
-            start = time.time()
-            while time.time() - start < timeout:
-                time.sleep(2)
-                response = self._qemu_monitor_cmd("info migrate", wait=True)
-
-                if "completed" in response:
-                    break
-                elif "failed" in response:
-                    self.logger.error(f"Migration failed. Status: {response}")
-                    raise Exception(f"Migration failed details: {response}")
-
-            # Copy disks
+            # Start copying disks in parallel with state migration.
             disks = self._get_disk_paths()
             secondary_disks = []
-            
+
             # Helper for parallel copy
             def _copy_disk(source, dest, desc):
                 self.logger.info(f"Copying {desc} disk {source} to {dest}")
                 subprocess.check_call(["cp", "--sparse=always", source, dest])
 
             import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                futures = []
+
+            disk_executor = concurrent.futures.ThreadPoolExecutor()
+            disk_futures = []
+
+            try:
                 for i, disk_source in enumerate(disks):
                     if i == 0:
                         disk_dest_name = "disk.qcow2"
@@ -1132,13 +1135,31 @@ class VM:
                         disk_dest_name = os.path.basename(disk_source)
                         secondary_disks.append(disk_dest_name)
                         desc = "secondary"
-                    
+
                     dest_path = os.path.join(vm_dir, disk_dest_name)
-                    futures.append(executor.submit(_copy_disk, disk_source, dest_path, desc))
-                
-                # Wait for all copies to complete
-                for future in concurrent.futures.as_completed(futures):
+                    disk_futures.append(
+                        disk_executor.submit(_copy_disk, disk_source, dest_path, desc)
+                    )
+
+                # Wait for migration complete
+                timeout = 600
+                start = time.time()
+                while time.time() - start < timeout:
+                    time.sleep(2)
+                    response = self._qemu_monitor_cmd("info migrate", wait=True)
+
+                    if "completed" in response:
+                        break
+                    elif "failed" in response:
+                        self.logger.error(f"Migration failed. Status: {response}")
+                        raise Exception(f"Migration failed details: {response}")
+
+                # Wait for disk copies to complete
+                for future in concurrent.futures.as_completed(disk_futures):
                     future.result()  # Raises exception if copy failed
+
+            finally:
+                disk_executor.shutdown(wait=True)
 
             # Save metadata (MAC addresses for NICs) to restore devices correctly
             metadata_file = os.path.join(vm_dir, "metadata.json")
@@ -1320,12 +1341,12 @@ class VR:
                     self.logger.error(f"Failed to save VM {vm.num}: {e}")
                     raise
 
-            # Create tar
-            self.logger.info(f"Creating tar archive")
-            with tarfile.open(tar_path, "w") as tar:
-                for vm in self.vms:
-                    vm_dir = os.path.join(tmpdir, f"vm{vm.num}")
-                    tar.add(vm_dir, arcname=f"vm{vm.num}")
+            # Create tar.
+            self.logger.info("Creating tar archive")
+            tar_cmd = ["tar", "-Scf", tar_path, "-C", tmpdir]
+            for vm in self.vms:
+                tar_cmd.append(f"vm{vm.num}")
+            subprocess.check_call(tar_cmd)
 
         self.logger.info(f"Snapshot saved: {tar_path}")
         return tar_path
@@ -1341,8 +1362,7 @@ class VR:
         self.logger.info(f"Extracting snapshot: {tar_path}")
         os.makedirs(extract_dir, exist_ok=True)
 
-        with tarfile.open(tar_path, "r") as tar:
-            tar.extractall(extract_dir)
+        subprocess.check_call(["tar", "-Sxf", tar_path, "-C", extract_dir])
 
         self.logger.info(f"Snapshot extracted to: {extract_dir}")
         return extract_dir
