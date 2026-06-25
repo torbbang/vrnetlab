@@ -40,6 +40,19 @@ def trace(self, message, *args, **kws):
 logging.Logger.trace = trace
 
 
+def select_cpu_model():
+    """Pick the QEMU -cpu model based on the host CPU vendor."""
+    try:
+        with open("/proc/cpuinfo") as f:
+            cpuinfo = f.read()
+    except OSError:
+        cpuinfo = ""
+
+    if "AuthenticAMD" in cpuinfo:
+        return "qemu64,+ssse3,+sse4.1,+sse4.2"
+    return "host,+ssse3,+sse4.1,+sse4.2,+x2apic"
+
+
 class XRv9k_vm(vrnetlab.VM):
     def __init__(
         self, hostname, username, password, nics, conn_mode, vcpu, ram, install=False
@@ -48,14 +61,16 @@ class XRv9k_vm(vrnetlab.VM):
         for e in sorted(os.listdir("/")):
             if not disk_image and re.search(".qcow2", e):
                 disk_image = "/" + e
+        cpu = select_cpu_model()
         super(XRv9k_vm, self).__init__(
             username,
             password,
             disk_image=disk_image,
             ram=ram,
             smp=f"cores={vcpu},threads=1,sockets=1",
-            cpu="host,+ssse3,+sse4.1,+sse4.2,+x2apic",
+            cpu=cpu,
         )
+        self.logger.info(f"Selected QEMU CPU model: {cpu}")
         
         # extract version num
         version = ""
