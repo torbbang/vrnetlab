@@ -6,7 +6,8 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).parent))
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "common"))
 import vrnetlab
 
 
@@ -39,9 +40,9 @@ class TestQemuResourceEnvironment(unittest.TestCase):
 
     def test_sonic_launchers_use_common_smp_override(self):
         launchers = [
-            Path(__file__).parents[1] / "sonic/docker/launch.py",
-            Path(__file__).parents[1] / "dell/dell_sonic/docker/launch.py",
-            Path(__file__).parents[1] / "plvision/plvision_sonic/docker/launch.py",
+            REPO_ROOT / "sonic/docker/launch.py",
+            REPO_ROOT / "dell/dell_sonic/docker/launch.py",
+            REPO_ROOT / "plvision/plvision_sonic/docker/launch.py",
         ]
 
         for launcher in launchers:
@@ -60,7 +61,7 @@ class TestQemuResourceEnvironment(unittest.TestCase):
             self.assertIn("2", smp_defaults, launcher)
 
     def test_sros_uses_common_resource_properties(self):
-        launcher = Path(__file__).parents[1] / "nokia/sros/docker/launch.py"
+        launcher = REPO_ROOT / "nokia/sros/docker/launch.py"
         tree = ast.parse(launcher.read_text(), filename=str(launcher))
         sros_vm = next(
             node
